@@ -1,0 +1,84 @@
+trigger:
+  branches:
+    include:
+      - '*'
+
+resources:
+  repositories:
+    - repository: repo1
+      type: git
+      name: <organization>/<project>/<repo1>
+    - repository: repo2
+      type: git
+      name: <organization>/<project>/<repo2>
+    # Dodaj kolejne repozytoria według potrzeby
+
+jobs:
+- job: BuildAndPushImages
+  displayName: "Build and Push Docker Images"
+  pool:
+    vmImage: 'ubuntu-latest'
+
+  steps:
+    # Krok 1: Checkout repozytorium
+    - task: CheckoutMultipleRepos@1
+      inputs:
+        repositories: |
+          repo1
+          repo2
+
+    # Krok 2: Instalacja Trivy
+    - script: |
+        sudo apt-get update -y
+        sudo apt-get install -y wget
+        wget https://github.com/aquasecurity/trivy/releases/download/v0.42.0/trivy_0.42.0_Linux-64bit.deb
+        sudo dpkg -i trivy_0.42.0_Linux-64bit.deb
+      displayName: "Install Trivy"
+
+    # Krok 3: Znalezienie Dockerfile i budowanie obrazów
+    - script: |
+        for repo_dir in $(find $(System.DefaultWorkingDirectory) -mindepth 1 -maxdepth 1 -type d); do
+          repo_name=$(basename $repo_dir)
+          find $repo_dir -name Dockerfile | while read dockerfile; do
+            image_tag=""
+            if [[ -n "${{ parameters.tagMap[$repo_name] }}" ]]; then
+              image_tag=${{ parameters.tagMap[$repo_name] }}-$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
+            else
+              image_tag=$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
+            fi
+            docker build -f $dockerfile -t myregistry.azurecr.io/$image_tag .
+            docker save myregistry.azurecr.io/$image_tag | gzip > $(basename $(dirname $dockerfile)).tar.gz
+            az acr login --name myregistry
+            docker push myregistry.azurecr.io/$image_tag
+          done
+        done
+      displayName: "Build and Push Docker Images"
+
+    # Krok 4: Testy bezpieczeństwa Trivy i generowanie raportów w formacie JUnit
+    - script: |
+        for image in $(docker images --format '{{.Repository}}:{{.Tag}}'); do
+          trivy image --severity HIGH,CRITICAL --format template --template "@/contrib/junit.tpl" -o trivy_report_$(basename $image).xml $image
+        done
+      displayName: "Run Trivy Security Scans and Generate JUnit Reports"
+
+    # Krok 5: Zapisanie wyników Trivy jako artefakty
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)'
+        artifact: 'trivy_reports'
+      displayName: "Upload Trivy Reports as Pipeline Artifact"
+
+    # Krok 6: Publikacja wyników Trivy w formacie JUnit
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/trivy_report_*.xml'
+        failTaskOnFailedTests: true
+      displayName: "Publish Trivy JUnit Test Results"
+
+    # Krok 7: Zapisanie obrazów Docker do artefaktów
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)'
+        artifact: 'docker_images'
+      displayName: "Upload Docker Images as Pipeline Artifact"
