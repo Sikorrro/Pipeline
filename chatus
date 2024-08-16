@@ -32,6 +32,11 @@ jobs:
         wget https://github.com/aquasecurity/trivy/releases/download/v0.42.0/trivy_0.42.0_Linux-64bit.deb
         sudo dpkg -i trivy_0.42.0_Linux-64bit.deb
       displayName: "Install Trivy"
+    
+    - script: |
+        mkdir -p /contrib
+        wget https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/junit.tpl -O /contrib/junit.tpl
+      displayName: "Download JUnit Template for Trivy"
 
     # Krok 3: Znalezienie Dockerfile i budowanie obrazów tylko dla repozytorium, które wyzwoliło pipeline
     - script: |
