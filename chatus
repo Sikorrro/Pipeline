@@ -5,6 +5,8 @@ trigger:
 
 resources:
   repositories:
+    - repository: self
+      type: git
     - repository: repo1
       type: git
       name: <organization>/<project>/<repo1>
@@ -20,12 +22,8 @@ jobs:
     vmImage: 'ubuntu-latest'
 
   steps:
-    # Krok 1: Checkout repozytorium
-    - task: CheckoutMultipleRepos@1
-      inputs:
-        repositories: |
-          repo1
-          repo2
+    # Krok 1: Checkout repozytorium, które wyzwoliło pipeline
+    - checkout: self
 
     # Krok 2: Instalacja Trivy
     - script: |
@@ -35,22 +33,20 @@ jobs:
         sudo dpkg -i trivy_0.42.0_Linux-64bit.deb
       displayName: "Install Trivy"
 
-    # Krok 3: Znalezienie Dockerfile i budowanie obrazów
+    # Krok 3: Znalezienie Dockerfile i budowanie obrazów tylko dla repozytorium, które wyzwoliło pipeline
     - script: |
-        for repo_dir in $(find $(System.DefaultWorkingDirectory) -mindepth 1 -maxdepth 1 -type d); do
-          repo_name=$(basename $repo_dir)
-          find $repo_dir -name Dockerfile | while read dockerfile; do
-            image_tag=""
-            if [[ -n "${{ parameters.tagMap[$repo_name] }}" ]]; then
-              image_tag=${{ parameters.tagMap[$repo_name] }}-$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
-            else
-              image_tag=$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
-            fi
-            docker build -f $dockerfile -t myregistry.azurecr.io/$image_tag .
-            docker save myregistry.azurecr.io/$image_tag | gzip > $(basename $(dirname $dockerfile)).tar.gz
-            az acr login --name myregistry
-            docker push myregistry.azurecr.io/$image_tag
-          done
+        repo_dir=$(System.DefaultWorkingDirectory)
+        find $repo_dir -name Dockerfile | while read dockerfile; do
+          image_tag=""
+          if [[ -n "${{ parameters.tagMap[$(Build.Repository.Name)] }}" ]]; then
+            image_tag=${{ parameters.tagMap[$(Build.Repository.Name)] }}-$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
+          else
+            image_tag=$(basename $(dirname $dockerfile))-$(Build.SourceBranchName)
+          fi
+          docker build -f $dockerfile -t myregistry.azurecr.io/$image_tag .
+          docker save myregistry.azurecr.io/$image_tag | gzip > $(basename $(dirname $dockerfile)).tar.gz
+          az acr login --name myregistry
+          docker push myregistry.azurecr.io/$image_tag
         done
       displayName: "Build and Push Docker Images"
 
